@@ -1,0 +1,122 @@
+syntax = "proto3";
+
+package crowd;
+
+// The master hosts this service. Slave devices (phones / edge nodes) are
+// clients: they register, receive a block of layers, and then serve forward
+// passes over that block.
+service CrowdML {
+  // Slave announces itself and its capabilities. Master replies with the id
+  // it should use for every later call.
+  rpc Register(RegisterRequest) returns (RegisterReply) {}
+
+  // Slave streams heartbeats; master streams back assignment/pause commands.
+  // Keeping this bidirectional lets the balancer re-partition without the
+  // slave having to poll.
+  rpc Heartbeat(stream HeartbeatRequest) returns (stream Command) {}
+
+  // Master pushes one shard of the gguf model to a slave.
+  rpc LoadShard(stream ShardChunk) returns (LoadReply) {}
+
+  // Forward pass over the block a slave owns. Called by the master (or by the
+  // previous slave in the chain) with the activations entering the block.
+  rpc Forward(ActivationBatch) returns (ActivationBatch) {}
+
+  // Backward pass, for training / finetuning. Returns the gradient w.r.t. the
+  // block's input so it can be handed to the previous stage.
+  rpc Backward(ActivationBatch) returns (ActivationBatch) {}
+
+  // Slave reports the gradients it accumulated for its own parameters.
+  rpc PushGradients(stream TensorChunk) returns (PushReply) {}
+}
+
+message DeviceCaps {
+  string platform = 1;      // "android", "ios", "linux"
+  uint64 ram_bytes = 2;
+  uint32 cpu_cores = 3;
+  bool has_gpu = 4;
+  string accelerator = 5;   // "metal", "vulkan", "none"
+  double flops_estimate = 6;
+  double uplink_mbps = 7;
+  double downlink_mbps = 8;
+}
+
+message RegisterRequest {
+  string hostname = 1;
+  DeviceCaps caps = 2;
+}
+
+message RegisterReply {
+  string device_id = 1;
+  uint32 heartbeat_interval_ms = 2;
+}
+
+message HeartbeatRequest {
+  string device_id = 1;
+  double battery_pct = 2;
+  double load_avg = 3;
+  uint64 free_ram_bytes = 4;
+  double last_forward_ms = 5;
+}
+
+message Command {
+  enum Kind {
+    NOOP = 0;
+    ASSIGN = 1;     // take ownership of the layers in `assignment`
+    RELEASE = 2;    // drop the current block
+    PAUSE = 3;
+    SHUTDOWN = 4;
+  }
+  Kind kind = 1;
+  Assignment assignment = 2;
+}
+
+// A contiguous half-open range of transformer layers [start, end).
+message Assignment {
+  string device_id = 1;
+  uint32 start_layer = 2;
+  uint32 end_layer = 3;
+  string model_id = 4;
+  string next_device_id = 5;  // empty when this block is the last stage
+}
+
+message ShardChunk {
+  string device_id = 1;
+  string model_id = 2;
+  uint32 start_layer = 3;
+  uint32 end_layer = 4;
+  uint32 chunk_index = 5;
+  bool last = 6;
+  bytes payload = 7;
+}
+
+message LoadReply {
+  bool ok = 1;
+  string message = 2;
+  uint64 bytes_received = 3;
+}
+
+// Dense activation tensor. `data` is raw little-endian bytes of `dtype`.
+message ActivationBatch {
+  string request_id = 1;
+  string model_id = 2;
+  repeated uint32 shape = 3;
+  string dtype = 4;         // "f32", "f16", "i8"
+  bytes data = 5;
+  uint32 from_layer = 6;
+  uint32 to_layer = 7;
+}
+
+message TensorChunk {
+  string device_id = 1;
+  string tensor_name = 2;
+  repeated uint32 shape = 3;
+  string dtype = 4;
+  bool last = 5;
+  bytes payload = 6;
+}
+
+message PushReply {
+  bool ok = 1;
+  uint32 round = 2;
+}
