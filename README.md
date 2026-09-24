@@ -1,5 +1,7 @@
 # Crowd ML
 
+My first thoughts about this project:[url]( https://medium.com/@fusion-ai/massive-crowd-based-federated-pretraining-of-the-llm-on-the-edge-devices-c95ef8d01743)
+
 Cross-device inference and finetuning over gRPC. A **master** node partitions a
 gguf model into contiguous blocks of layers and allocates them to **slave**
 devices (phones, edge nodes); activations then flow through the devices as a
